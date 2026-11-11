@@ -46,6 +46,8 @@ end
 try
     inputSize = net.Layers(1).InputSize;
 catch
+    warning("Could not auto-detect input size. Assuming [224 224 3]. " + ...
+        "VERIFY this matches the net or predictions will be wrong!");
     inputSize = [224 224 3]; % <-- set manually if auto-detection fails
 end
 fprintf("Model: %s | input %dx%d | %d classes\n", ...

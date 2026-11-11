@@ -76,7 +76,14 @@ else
 end
 lgraph = replaceLayer(lgraph, inputName, inputLayer);
 
-% analyzeNetwork(lgraph)  % decomment to inspect the architecture
+% Inspect the network as a DLNETWORK (the object trainnet actually trains).
+% Do NOT analyze the raw lgraph: the analyzer then applies the legacy
+% trainNetwork rules -> false "missing/unconnected output layer" errors.
+netPreview = dlnetwork(lgraph);
+numParams = sum(cellfun(@numel, netPreview.Learnables.Value));
+fprintf("Total learnable parameters: %d (%.3f M)\n", numParams, numParams/1e6);
+analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
+% netPreview.Learnables      % uncomment for the learnables table as text
 
 %% =======================================================================
 %% TEST 1 : on n'entraine que la derniere couche (head only)

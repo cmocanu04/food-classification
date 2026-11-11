@@ -54,6 +54,15 @@ inputLayer = imageInputLayer(inputSize, ...
 lgraph = replaceLayer(lgraph, inputName, inputLayer);
 net = dlnetwork(lgraph);
 
+% Freeze every pretrained parameter except the new Food-11 classifier.
+for idx = 1:height(net.Learnables)
+    net = setLearnRateFactor(net, ...
+        string(net.Learnables.Layer(idx)), ...
+        string(net.Learnables.Parameter(idx)), 0);
+end
+net = setLearnRateFactor(net, classifierName, "Weights", 10);
+net = setLearnRateFactor(net, classifierName, "Bias", 10);
+
 % Inspect the adapted network before training.
 analyzeNetwork(net)
 

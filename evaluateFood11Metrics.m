@@ -28,5 +28,6 @@ for c = 1:numel(classNames)
     fprintf("  %-16s %.4f\n", classNames{c}, f1perclass(c));
 end
 
+figure(Name="Validation confusion matrix");
 confusionchart(labelsVal, pred, RowSummary="row-normalized");
 end

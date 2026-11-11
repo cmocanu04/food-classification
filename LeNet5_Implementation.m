@@ -1,12 +1,27 @@
-% LeNet-5 adapte a la classification Food-11.
-% Charge les images et leurs labels.
+% LeNet5_Implementation.m
+% LeNet-5 adapte a la classification Food-11 (reseau entraine from scratch,
+% architecture originale 1998 : tanh + average pooling). Baseline de
+% reference pour comparer avec le transfer learning.
+%
+% STEP 1: run FoodClassification_database.m first. It provides
+%   trainData, valData, labelsTrain, labelsVal, augTrain, augVal.
+% STEP 2: run this script (no test blocks: single training configuration).
 
 close all
 
+inputSize = [64 64 3];  % MUST match FoodClassification_database.m
+
+assert(exist("augTrain", "var") == 1, ...
+    "Run FoodClassification_database.m first.");
+
 % Display a random sample of training images.
 perm = randperm(numel(labelsTrain), 25);
-subset = imgDataTrain(:, :, :, perm);
-montage(subset)
+imgs = cell(1, numel(perm));
+for k = 1:numel(perm)
+    imgs{k} = imresize(readimage(trainData, perm(k)), inputSize(1:2));
+end
+figure(Name="Training samples");
+montage(imgs);
 
 % LeNet-5 utilise deux blocs convolution + sous-echantillonnage,
 % puis trois couches entierement connectees.
@@ -28,13 +43,7 @@ layers = [
 % Inspect the network architecture.
 analyzeNetwork(layers)
 
-% The official test set is supplied through ValidationData so its
-% held-out accuracy and loss can be plotted during training. The custom plot
-% labels these curves "Test set".
-% Train the network using the R2024a dlnetwork workflow.
 miniBatchSize = 128;
-% Keep MATLAB's progress window for device/status information, and
-% add a companion plot with smoothed curves and epoch bands.
 maxEpochs = 20;
 smoothingWindow = 10;
 progressFcn = makeCourseProgressOutputFcn( ...
@@ -45,22 +54,15 @@ options = trainingOptions("adam", ...
     MaxEpochs=maxEpochs, ...
     Shuffle="every-epoch", ...
     MiniBatchSize=miniBatchSize, ...
-    ValidationData={imgDataTest, labelsTest}, ...
-    ValidationFrequency=50, ...
+    ValidationData={augVal, labelsVal}, ...
+    ValidationFrequency=round(numel(labelsTrain)/miniBatchSize), ...
     Verbose=false, ...
     Plots="training-progress", ...
     OutputFcn=progressFcn, ...
     Metrics="accuracy");
 
-net = trainnet(imgDataTrain, labelsTrain, layers, "crossentropy", options);
+net = trainnet(augTrain, labelsTrain, layers, "crossentropy", options);
 
-% Evaluate the final network on the complete training and test sets.
-trainScores = minibatchpredict(net, imgDataTrain);
-trainLabelsPred = scores2label(trainScores, categories(labelsTrain));
-trainAccuracy = mean(trainLabelsPred == labelsTrain);
-fprintf("Train-set accuracy: %.2f%%\n", 100 * trainAccuracy);
-
-testScores = minibatchpredict(net, imgDataTest);
-testLabelsPred = scores2label(testScores, categories(labelsTrain));
-testAccuracy = mean(testLabelsPred == labelsTest);
-fprintf("Test-set accuracy: %.2f%%\n", 100 * testAccuracy);
+% Save the trained network and evaluate on train and validation sets.
+save("LeNet5_Food11.mat", "net", "-v7.3");
+evaluateFood11Metrics(net, augVal, labelsVal);

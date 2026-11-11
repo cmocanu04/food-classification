@@ -1,39 +1,50 @@
+% MobileNetV2_Implementation.m
 % MobileNetV2 transfer learning for Food-11.
-% The pretrained classifier head is adapted to 11 food classes.
+%
+% STEP 1: run FoodClassification_database.m first. It provides
+%   trainData, valData, labelsTrain, labelsVal, augTrain, augVal.
+% STEP 2: decomment ONE of the TEST blocks below and run this script.
+%
+% Test 1: head only (seule la derniere couche apprend)
+% Test 2: fine-tuning partiel (les derniers blocs + la tete)
+% Test 3: fine-tuning complet (toutes les couches)
+%
+% After training, evaluateFood11Metrics reports accuracy + macro F1.
+% Final submission: use predict_test_set.m on the best saved .mat.
 
 close all
 
-inputSize = [64 64 3];
+inputSize = [64 64 3];  % MUST match FoodClassification_database.m
 numClasses = 11;
 
-% Run FoodClassification_database.m first. It provides the 64-by-64 image
-% arrays and labels used below.
-assert(isequal(size(imgDataTrain, 1:3), inputSize), ...
-    "Run FoodClassification_database.m with 64-by-64 preprocessing first.");
+assert(exist("augTrain", "var") == 1, ...
+    "Run FoodClassification_database.m first.");
+assert(exist("labelsTrain", "var") == 1, ...
+    "Run FoodClassification_database.m first.");
 
 % Display a random sample of training images.
-perm = randperm(numel(labelsTrain), min(25, numel(labelsTrain)));
-subset = imgDataTrain(:, :, :, perm);
+perm = randperm(numel(labelsTrain), 25);
+imgs = cell(1, numel(perm));
+for k = 1:numel(perm)
+    imgs{k} = imresize(readimage(trainData, perm(k)), inputSize(1:2));
+end
 figure(Name="Training samples");
-montage(subset);
+montage(imgs);
 
-% Load ImageNet weights through the MobileNetV2 support package.
+% ---------------------------------------------------------------------
+% Build the network: ImageNet weights, 11-class head, resized input.
+% ---------------------------------------------------------------------
 pretrainedNet = mobilenetv2;
 lgraph = layerGraph(pretrainedNet);
 
-% MobileNetV2 uses a final fully connected layer for its classifier head.
-% Do not replace Conv_1: it must continue to output 1280 feature channels.
+% Replace the final fully connected layer with an 11-class head.
 isFullyConnected = arrayfun(@(layer) ...
     isa(layer, "nnet.cnn.layer.FullyConnectedLayer"), lgraph.Layers);
 classifierName = lgraph.Layers(find(isFullyConnected, 1, "last")).Name;
-newClassifier = fullyConnectedLayer(numClasses, ...
-    Name=classifierName, ...
-    WeightLearnRateFactor=10, ...
-    BiasLearnRateFactor=10);
+newClassifier = fullyConnectedLayer(numClasses, Name=classifierName);
 lgraph = replaceLayer(lgraph, classifierName, newClassifier);
 
-% trainnet expects a differentiable network output rather than the legacy
-% classification output layer.
+% trainnet expects softmax instead of the legacy classification output.
 isClassificationOutput = arrayfun(@(layer) ...
     isa(layer, "nnet.cnn.layer.ClassificationOutputLayer"), lgraph.Layers);
 classificationOutputName = lgraph.Layers( ...
@@ -41,64 +52,149 @@ classificationOutputName = lgraph.Layers( ...
 lgraph = replaceLayer(lgraph, classificationOutputName, ...
     softmaxLayer(Name=classificationOutputName));
 
-% MobileNetV2 is normally defined for 224-by-224 images. Its global
-% pooling head allows the spatial input size to be reduced to 64-by-64.
+% Resized input layer (possible thanks to global average pooling).
 inputName = pretrainedNet.InputNames{1};
 pretrainedInputLayer = pretrainedNet.Layers( ...
     strcmp({pretrainedNet.Layers.Name}, inputName));
-inputLayer = imageInputLayer(inputSize, ...
-    Name=inputName, ...
-    Normalization=pretrainedInputLayer.Normalization, ...
-    Mean=pretrainedInputLayer.Mean, ...
-    StandardDeviation=pretrainedInputLayer.StandardDeviation);
-lgraph = replaceLayer(lgraph, inputName, inputLayer);
-net = dlnetwork(lgraph);
-
-% Freeze every pretrained parameter except the new Food-11 classifier.
-for idx = 1:height(net.Learnables)
-    net = setLearnRateFactor(net, ...
-        string(net.Learnables.Layer(idx)), ...
-        string(net.Learnables.Parameter(idx)), 0);
+if isempty(pretrainedInputLayer.Mean)
+    inputLayer = imageInputLayer(inputSize, ...
+        Name=inputName, Normalization=pretrainedInputLayer.Normalization);
+else
+    inputLayer = imageInputLayer(inputSize, ...
+        Name=inputName, ...
+        Normalization=pretrainedInputLayer.Normalization, ...
+        Mean=pretrainedInputLayer.Mean, ...
+        StandardDeviation=pretrainedInputLayer.StandardDeviation);
 end
-net = setLearnRateFactor(net, classifierName, "Weights", 10);
-net = setLearnRateFactor(net, classifierName, "Bias", 10);
+lgraph = replaceLayer(lgraph, inputName, inputLayer);
 
-% Inspect the adapted network before training.
-analyzeNetwork(net)
+% analyzeNetwork(lgraph)  % decomment to inspect the architecture
 
-miniBatchSize = 32;
-maxEpochs = 12;
-validationFrequency = 50;
-smoothingWindow = 10;
-progressFcn = makeCourseProgressOutputFcn( ...
-    numel(labelsTrain), miniBatchSize, maxEpochs, smoothingWindow);
+%% =======================================================================
+%% TEST 1 : on n'entraine que la derniere couche (head only)
+% -----------------------------------------------------------------------
+% Toutes les couches pre-entrainees sont gelees (learn rate factor 0).
+% Seule la nouvelle couche fully-connected a 11 classes apprend :
+%   - LR de base 1e-4, facteur 10 sur la tete => LR effectif 1e-3
+%   - adam, MiniBatchSize 32, MaxEpochs 10, patience 4
+%   - validation une fois par epoque
+% Resultat sauvegarde dans : MobileNetV2_Food11_test1_head.mat
+% >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
+%% =======================================================================
+% netT1 = dlnetwork(lgraph);
+% for idx = 1:height(netT1.Learnables)
+%     netT1 = setLearnRateFactor(netT1, ...
+%         string(netT1.Learnables.Layer(idx)), ...
+%         string(netT1.Learnables.Parameter(idx)), 0);
+% end
+% netT1 = setLearnRateFactor(netT1, classifierName, "Weights", 10);
+% netT1 = setLearnRateFactor(netT1, classifierName, "Bias", 10);
+%
+% miniBatchSize = 32; maxEpochs = 10;
+% progressFcn = makeCourseProgressOutputFcn( ...
+%     numel(labelsTrain), miniBatchSize, maxEpochs, 10);
+% options = trainingOptions("adam", ...
+%     InitialLearnRate=1e-4, ...
+%     MaxEpochs=maxEpochs, ...
+%     MiniBatchSize=miniBatchSize, ...
+%     Shuffle="every-epoch", ...
+%     ValidationData={augVal, labelsVal}, ...
+%     ValidationFrequency=round(numel(labelsTrain)/miniBatchSize), ...
+%     ValidationPatience=4, ...
+%     Verbose=false, ...
+%     Plots="training-progress", ...
+%     OutputFcn=progressFcn, ...
+%     Metrics="accuracy");
+% netT1 = trainnet(augTrain, labelsTrain, netT1, "crossentropy", options);
+% save("MobileNetV2_Food11_test1_head.mat", "netT1", "-v7.3");
+% evaluateFood11Metrics(netT1, augVal, labelsVal);
 
-options = trainingOptions("adam", ...
-    InitialLearnRate=1e-4, ...
-    MaxEpochs=maxEpochs, ...
-    MiniBatchSize=miniBatchSize, ...
-    Shuffle="every-epoch", ...
-    ValidationData={imgDataTest, labelsTest}, ...
-    ValidationFrequency=validationFrequency, ...
-    Verbose=false, ...
-    Plots="training-progress", ...
-    OutputFcn=progressFcn, ...
-    Metrics="accuracy");
+%% =======================================================================
+%% TEST 2 : fine-tuning partiel (les derniers blocs + la tete)
+% -----------------------------------------------------------------------
+% On degele les K dernieres couches du backbone (K = 24, soit environ les
+% 2 derniers blocs bottleneck + Conv_1) en plus de la tete :
+%   - LR 1e-4 uniforme sur les couches degelees (facteur 1 partout)
+%   - adam, MiniBatchSize 32, MaxEpochs 8, patience 3
+% Verifier la frontiere des K couches avec analyzeNetwork si besoin.
+% Resultat sauvegarde dans : MobileNetV2_Food11_test2_partial.mat
+% >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
+%% =======================================================================
+% % Depart des poids ImageNet (defaut) :
+% netT2 = dlnetwork(lgraph);
+% % OU depart des poids du Test 1 (decommenter les 2 lignes suivantes et
+% % commenter la ligne au-dessus) :
+% % S = load("MobileNetV2_Food11_test1_head.mat"); netT2 = S.netT1;
+%
+% K = 24;  % nombre de couches degelees a partir de la fin
+% layersT2 = netT2.Layers;
+% unfreezeFrom = numel(layersT2) - K + 1;
+% for idx = 1:height(netT2.Learnables)
+%     lyr = netT2.Learnables.Layer(idx);
+%     pos = find(strcmp({layersT2.Name}, char(lyr)), 1);
+%     factor = double(pos >= unfreezeFrom);
+%     netT2 = setLearnRateFactor(netT2, lyr, ...
+%         netT2.Learnables.Parameter(idx), factor);
+% end
+%
+% miniBatchSize = 32; maxEpochs = 8;
+% progressFcn = makeCourseProgressOutputFcn( ...
+%     numel(labelsTrain), miniBatchSize, maxEpochs, 10);
+% options = trainingOptions("adam", ...
+%     InitialLearnRate=1e-4, ...
+%     MaxEpochs=maxEpochs, ...
+%     MiniBatchSize=miniBatchSize, ...
+%     Shuffle="every-epoch", ...
+%     ValidationData={augVal, labelsVal}, ...
+%     ValidationFrequency=round(numel(labelsTrain)/miniBatchSize), ...
+%     ValidationPatience=3, ...
+%     Verbose=false, ...
+%     Plots="training-progress", ...
+%     OutputFcn=progressFcn, ...
+%     Metrics="accuracy");
+% netT2 = trainnet(augTrain, labelsTrain, netT2, "crossentropy", options);
+% save("MobileNetV2_Food11_test2_partial.mat", "netT2", "-v7.3");
+% evaluateFood11Metrics(netT2, augVal, labelsVal);
 
-net = trainnet(imgDataTrain, labelsTrain, net, "crossentropy", options);
-
-% Save the trained network and its learned weights.
-modelFile = fullfile(fileparts(mfilename("fullpath")), ...
-    "MobileNetV2_Food11.mat");
-save(modelFile, "net", "-v7.3");
-
-% Evaluate the final network on the held-out split.
-trainScores = minibatchpredict(net, imgDataTrain);
-trainLabelsPred = scores2label(trainScores, categories(labelsTrain));
-trainAccuracy = mean(trainLabelsPred == labelsTrain);
-fprintf("Train-set accuracy: %.2f%%\n", 100 * trainAccuracy);
-
-testScores = minibatchpredict(net, imgDataTest);
-testLabelsPred = scores2label(testScores, categories(labelsTest));
-testAccuracy = mean(testLabelsPred == labelsTest);
-fprintf("Test-set accuracy: %.2f%%\n", 100 * testAccuracy);
+%% =======================================================================
+%% TEST 3 : fine-tuning complet (toutes les couches)
+% -----------------------------------------------------------------------
+% Toutes les couches apprennent, avec un LR tres faible pour ne pas
+% detruire les poids ImageNet :
+%   - LR de base 1e-5, facteur 10 sur la tete => tete a 1e-4
+%   - adam, MiniBatchSize 32, MaxEpochs 8, patience 3
+% Resultat sauvegarde dans : MobileNetV2_Food11_test3_full.mat
+% >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
+%% =======================================================================
+% % Depart des poids ImageNet (defaut) :
+% netT3 = dlnetwork(lgraph);
+% % OU depart des poids du Test 1 (decommenter les 2 lignes suivantes et
+% % commenter la ligne au-dessus) :
+% % S = load("MobileNetV2_Food11_test1_head.mat"); netT3 = S.netT1;
+%
+% for idx = 1:height(netT3.Learnables)
+%     netT3 = setLearnRateFactor(netT3, ...
+%         string(netT3.Learnables.Layer(idx)), ...
+%         string(netT3.Learnables.Parameter(idx)), 1);
+% end
+% netT3 = setLearnRateFactor(netT3, classifierName, "Weights", 10);
+% netT3 = setLearnRateFactor(netT3, classifierName, "Bias", 10);
+%
+% miniBatchSize = 32; maxEpochs = 8;
+% progressFcn = makeCourseProgressOutputFcn( ...
+%     numel(labelsTrain), miniBatchSize, maxEpochs, 10);
+% options = trainingOptions("adam", ...
+%     InitialLearnRate=1e-5, ...
+%     MaxEpochs=maxEpochs, ...
+%     MiniBatchSize=miniBatchSize, ...
+%     Shuffle="every-epoch", ...
+%     ValidationData={augVal, labelsVal}, ...
+%     ValidationFrequency=round(numel(labelsTrain)/miniBatchSize), ...
+%     ValidationPatience=3, ...
+%     Verbose=false, ...
+%     Plots="training-progress", ...
+%     OutputFcn=progressFcn, ...
+%     Metrics="accuracy");
+% netT3 = trainnet(augTrain, labelsTrain, netT3, "crossentropy", options);
+% save("MobileNetV2_Food11_test3_full.mat", "netT3", "-v7.3");
+% evaluateFood11Metrics(netT3, augVal, labelsVal);

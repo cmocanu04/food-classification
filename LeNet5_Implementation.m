@@ -11,7 +11,7 @@ montage(subset)
 % LeNet-5 utilise deux blocs convolution + sous-echantillonnage,
 % puis trois couches entierement connectees.
 layers = [
-    imageInputLayer([32 32 3], Name="input")
+    imageInputLayer([64 64 3], Name="input")
     convolution2dLayer(5, 6, Name="conv1")
     tanhLayer(Name="tanh1")
     averagePooling2dLayer(2, Stride=2, Name="pool1")

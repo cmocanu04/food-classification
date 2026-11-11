@@ -15,15 +15,15 @@ rng default
 
 % Convertit les images et récupère leurs labels.
 labelsTrain = trainData.Labels;
-imgDataTrain = zeros(32, 32, 3, numel(trainData.Files), "single");
+imgDataTrain = zeros(64, 64, 3, numel(trainData.Files), "single");
 for i = 1:numel(trainData.Files)
     image = readimage(trainData, i);
-    imgDataTrain(:, :, :, i) = im2single(imresize(image(:, :, 1:3), [32 32]));
+    imgDataTrain(:, :, :, i) = im2single(imresize(image(:, :, 1:3), [64 64]));
 end
 
 labelsTest = testData.Labels;
-imgDataTest = zeros(32, 32, 3, numel(testData.Files), "single");
+imgDataTest = zeros(64, 64, 3, numel(testData.Files), "single");
 for i = 1:numel(testData.Files)
     image = readimage(testData, i);
-    imgDataTest(:, :, :, i) = im2single(imresize(image(:, :, 1:3), [32 32]));
+    imgDataTest(:, :, :, i) = im2single(imresize(image(:, :, 1:3), [64 64]));
 end

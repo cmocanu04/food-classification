@@ -23,8 +23,10 @@ f1macro = mean(f1perclass);
 
 fprintf("Validation accuracy : %.2f %%\n", 100*acc);
 fprintf("Validation macro F1 : %.4f\n", f1macro);
-disp(table(string(classNames), f1perclass, ...
-    VariableNames={"class", "F1"}));
+fprintf("Per-class F1:\n");
+for c = 1:numel(classNames)
+    fprintf("  %-16s %.4f\n", classNames{c}, f1perclass(c));
+end
 
 confusionchart(labelsVal, pred, RowSummary="row-normalized");
 end

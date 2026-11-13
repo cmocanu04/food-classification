@@ -1,8 +1,22 @@
-function outputFcn = makeCourseProgressOutputFcn(numTrainingObservations, miniBatchSize, maxEpochs, smoothingWindow)
-% Create a live training plot with smoothed training curves and epoch bands.
-% The test set is passed to trainnet as ValidationData, but is labeled as
-% the test set here to match the terminology used in these exercises.
+% makeCourseProgressOutputFcn.m
+% Graphique temps reel pendant l'entrainement : courbes lissees + bandes
+% d'epoques. Le jeu de test est passe a trainnet comme ValidationData, mais
+% est affiche comme jeu de test ici pour coller a la terminologie du cours.
+%
+% Lecture du graphique :
+%   - axe X = ITERATIONS (1 iteration = 1 batch traite + 1 maj des poids)
+%   - bandes grises alternantes = EPOQUES (1 epoque = passes completes
+%     sur tout le train = ceil(N_train/miniBatchSize) iterations)
+%   - courbe bleue : metrique d'entrainement, mesuree a CHAQUE iteration sur
+%     le batch courant -> tres bruitee, d'ou le lissage par moyenne mobile
+%   - courbe orange : metrique de validation, mesuree seulement 1 fois par
+%     epoque (ValidationFrequency) -> points espaces, plus stable
+%   - ecart croissant bleu/orange = signal de surapprentissage
 
+function outputFcn = makeCourseProgressOutputFcn(numTrainingObservations, miniBatchSize, maxEpochs, smoothingWindow)
+
+% Nombre d'iterations par epoque = nombre de batches necessaires pour
+% couvrir tout le train (dernier batch incomplet -> ceil).
 iterationsPerEpoch = ceil(numTrainingObservations / miniBatchSize);
 totalIterations = iterationsPerEpoch * maxEpochs;
 
@@ -48,14 +62,18 @@ trainingAccuracyHistory = [];
 outputFcn = @updatePlot;
 
     function stop = updatePlot(info)
+        % Appelee par trainnet a chaque iteration. info contient les
+        % metriques courantes ; on ajoute les points aux animatedlines.
         stop = false;
         if ~isgraphics(fig)
             return
         end
         if string(info.State) ~= "iteration"
-            return
+            return  % ignore les appels de debut/fin d'epoque
         end
 
+        % Courbe bleue : metrique sur le batch courant, lissee sur les
+        % dernieres iterations (movmean) pour enlever le bruit batch-a-batch.
         iteration = info.Iteration;
         if ~isempty(info.TrainingLoss)
             trainingLossHistory(end + 1) = info.TrainingLoss;
@@ -76,6 +94,8 @@ outputFcn = @updatePlot;
             addpoints(accuracyTrainLine, iteration, smoothedAccuracy(end));
         end
 
+        % Courbe orange : metrique de validation (validee 1 fois par epoque
+        % via ValidationFrequency) -> pointes discretes, pas de lissage utile.
         if isfield(info, 'ValidationLoss') && ~isempty(info.ValidationLoss)
             addpoints(lossTestLine, iteration, info.ValidationLoss);
         end
@@ -88,7 +108,8 @@ outputFcn = @updatePlot;
 end
 
 function bands = addEpochBands(ax, iterationsPerEpoch, maxEpochs, yLimits)
-% Shade alternate epochs and draw a light boundary at every epoch change.
+% Bandes grises alternantes : une bande = une epoque. Permet de voir les
+% frontieres entre epoques sur l'axe des iterations (voir en-tete du fichier).
 bands = gobjects(0);
 for epoch = 1:maxEpochs
     firstIteration = (epoch - 1) * iterationsPerEpoch + 0.5;

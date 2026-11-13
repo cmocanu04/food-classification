@@ -1,16 +1,20 @@
 
-% PREDICT_TEST_SET.m
-% Final ShuffleNet Test 3 predictions on official Food-11 test set.
+% Predictshufflenet.m
+% Predictions finales du ShuffleNet (Test 2) sur le jeu de test officiel
+% Food-11 : charge le reseau entraine, predit chaque image, ecrit le JSON
+% de soumission {"nom_image": "classe", ...}.
 
 close all;
 clc;
 
-%% 1. PARAMETERS
+%% 1. PARAMETRES
 
-modelFile = "ShuffleNet_Food11_test3_full.mat";
+% Reseau sauvegarde par ShuffleNet_Implementation.m (Test 2 : fine-tuning complet).
+modelFile = "ShuffleNet_Food11_test2_full.mat";
 
 testDir = fullfile("food-11", "food-11", "test");
 
+% Le dossier train sert seulement a retrouver l'ordre des classes (ci-dessous).
 if isfolder(fullfile("food-11", "train"))
     trainDir = fullfile("food-11", "train");
 elseif isfolder(fullfile("food-11", "food-11", "train"))
@@ -21,10 +25,14 @@ end
 
 outputJson = "predictions_shufflenet_final.json";
 
+% IMPORTANT : doit correspondre au inputSize utilise PENDANT l'entrainement
+% du modele charge ([224 224 3] pour le modele final).
 inputSize = [224 224 3];
+% Batch de prediction plus grand qu'a l'entrainement : pas de gradients ->
+% beaucoup moins de memoire par image, on peut aller plus vite.
 miniBatchSize = 250;
 
-%% 2. CHECK FILES AND DIRECTORIES
+%% 2. VERIFICATION DES FICHIERS ET DOSSIERS
 
 assert(isfile(modelFile), ...
     "Model file not found: %s", modelFile);
@@ -38,22 +46,27 @@ assert(isfolder(trainDir), ...
 fprintf("Training directory: %s\n", trainDir);
 fprintf("Test directory: %s\n", testDir);
 
-%% 3. LOAD TRAINED MODEL
+%% 3. CHARGEMENT DU MODELE ENTRAINE
 
-fprintf("\nLoading ShuffleNet Test 3 model...\n");
+fprintf("\nLoading ShuffleNet Test 2 model...\n");
 
+% Le .mat contient la variable netT2 sauvegardee apres l'entrainement.
 S = load(modelFile);
 
-assert(isfield(S, "netT3"), ...
-    "Variable netT3 not found in model file.");
+assert(isfield(S, "netT2"), ...
+    "Variable netT2 not found in model file.");
 
-net = S.netT3;
+net = S.netT2;
 
-%% 4. GET CLASS NAMES IN TRAINING ORDER
+%% 4. ORDRE DES CLASSES (celui de l entrainement)
 
 fprintf("\nRetrieving class order...\n");
 
-% Reconstruct the class order from the training dataset.
+% On reconstruit l'ordre des classes depuis le dataset d'entrainement :
+% la sortie du reseau est un vecteur de 11 scores, ou l'indice k correspond
+% a la k-ieme classe de categories(labelsTrain) (tri alphabetique). Si l'ordre
+% recree ici differait de celui de l'entrainement, les indices seraient
+% silencieusement permutes -> predictions toutes fausses sans erreur visible.
 trainingDS = imageDatastore( ...
     trainDir, ...
     IncludeSubfolders=true, ...
@@ -67,10 +80,12 @@ disp(classNames);
 assert(numel(classNames) == 11, ...
     "Expected 11 classes, found %d.", numel(classNames));
 
-%% 5. LOAD TEST DATASET
+%% 5. CHARGEMENT DU JEU DE TEST
 
 fprintf("\nLoading test dataset...\n");
 
+% Le dossier test est plat (pas de sous-dossiers de classes) : pas de labels,
+% c'est justement ce qu'on doit predire.
 testDS = imageDatastore( ...
     testDir, ...
     IncludeSubfolders=false);
@@ -83,8 +98,11 @@ fprintf("Number of test images: %d\n", numTest);
 assert(numTest == 3097, ...
     "Expected 3097 test images, found %d.", numTest);
 
-%% 6. EXTRACT IMAGE IDENTIFIERS
+%% 6. EXTRACTION DES IDENTIFIANTS D IMAGES
 
+% Le JSON de soumission associe le NOM de fichier (sans extension) a la
+% classe predite : on extrait donc ces identifiants. Verif unicite pour
+% garantir une entree JSON par image.
 names = cell(numTest, 1);
 
 for i = 1:numTest
@@ -95,10 +113,12 @@ end
 assert(numel(unique(names)) == numTest, ...
     "Duplicate image identifiers detected.");
 
-%% 7. PREPARE TEST IMAGES
+%% 7. PREPARATION DES IMAGES DE TEST
 
 fprintf("\nPreparing test images...\n");
 
+% Tout le test set est charge en RAM dans un seul tenseur 224x224x3xN :
+% preparation en une passe, puis predictions par lots rapides.
 imgTest = zeros( ...
     inputSize(1), ...
     inputSize(2), ...
@@ -110,16 +130,17 @@ for i = 1:numTest
 
     img = readimage(testDS, i);
 
-    % Convert grayscale images to RGB.
+    % Normalisation du nombre de canaux vers 3 (RGB), ce qu'attend la
+    % couche d'entree : niveaux de gris dupliques, RGBA ramene a RGB.
     if size(img, 3) == 1
         img = repmat(img, 1, 1, 3);
 
-    % Keep only the first three channels if necessary.
+    % Ne garder que les 3 premiers canaux si besoin (ex : RGBA -> RGB).
     elseif size(img, 3) > 3
         img = img(:, :, 1:3);
     end
 
-    % Resize while preserving pixel type.
+    % Resize en preservant le type des pixels (uint8).
     img = imresize(img, inputSize(1:2));
 
     imgTest(:, :, :, i) = img;
@@ -132,10 +153,13 @@ end
 
 fprintf("Image preparation completed.\n");
 
-%% 8. RUN PREDICTIONS
+%% 8. EXECUTION DES PREDICTIONS
 
 fprintf("\nStarting predictions...\n");
 
+% Predictions par lots de miniBatchSize : inference pure (pas de gradients,
+% pas de maj des poids). max(scores, [], 2) = indice du score maximal de
+% chaque image = classe predite.
 predIdx = zeros(numTest, 1);
 
 for startIdx = 1:miniBatchSize:numTest
@@ -154,15 +178,19 @@ for startIdx = 1:miniBatchSize:numTest
 
 end
 
-%% 9. CONVERT INDICES TO CLASS NAMES
+%% 9. CONVERSION DES INDICES EN NOMS DE CLASSES
 
 assert(all(predIdx >= 1 & predIdx <= numel(classNames)), ...
     "Invalid predicted class index.");
 
 predClasses = classNames(predIdx);
 
-%% 10. CHECK PREDICTION DISTRIBUTION
+%% 10. VERIFICATION DE LA DISTRIBUTION DES PREDICTIONS
 
+% Sanity check : la distribution des predictions doit ressembler a celle du
+% train (classes desequilibrees mais toutes presentes). Une classe jamais
+% predite ou une classe a 80 % serait suspecte (bug d'ordre des classes,
+% mauvais modele charge...).
 fprintf("\n====================================\n");
 fprintf("PREDICTION DISTRIBUTION\n");
 fprintf("====================================\n");
@@ -184,8 +212,11 @@ fprintf("Total predictions: %d\n", numel(predClasses));
 fprintf("Number of predicted classes: %d\n", ...
     numel(unique(predClasses)));
 
-%% 11. CREATE JSON
+%% 11. CREATION DU JSON
 
+% Format de soumission : {"nom_image": "classe_predite", ...}.
+% jsonencode sur chaque cle/valeur pour echapper correctement les caracteres,
+% puis re-decodage en fin de script pour verifier l'integralite du fichier.
 fprintf("\nCreating JSON file...\n");
 
 jsonEntries = strings(numTest, 1);
@@ -208,7 +239,7 @@ assert(fid ~= -1, ...
 fprintf(fid, "%s", jsonText);
 fclose(fid);
 
-%% 12. VERIFY JSON
+%% 12. VERIFICATION DU JSON
 
 fprintf("\nVerifying JSON file...\n");
 
@@ -228,7 +259,7 @@ assert(numel(jsonKeys) == numTest, ...
 
 fprintf("Number of JSON entries: %d\n", numel(jsonKeys));
 
-%% 13. FINAL SUMMARY
+%% 13. BILAN FINAL
 
 fprintf("\n====================================\n");
 fprintf("PREDICTION COMPLETED\n");

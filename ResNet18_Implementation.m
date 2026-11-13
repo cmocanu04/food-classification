@@ -1,28 +1,19 @@
 % ResNet18_Implementation.m
-% ResNet-18 transfer learning for Food-11.
-%
-% NOTE: requires the "Deep Learning Toolbox Model for ResNet-18 Network"
-% support package (resnet18). Install it once via the Add-On Explorer if
-% this is the first time you run this script.
-%
-% STEP 1: run FoodClassification_database.m first. It provides
+% Transfer learning ResNet-18 pour Food-11.
+
+% ETAPE 1 : lancer FoodClassification_database.m d'abord. Il fournit
 %   trainData, valData, labelsTrain, labelsVal, augTrain, augVal.
-% STEP 2: decomment ONE of the TEST blocks below and run this script.
+% ETAPE 2 : decommenter UN des blocs TEST ci-dessous et lancer ce script.
 %
-% Test 1: head only (seule la derniere couche apprend)
-% Test 2: fine-tuning partiel (le dernier stage res5 + la tete)
-% Test 3: fine-tuning complet (toutes les couches)
+% Test 1 : tete seule (seule la derniere couche apprend)
+% Test 2 : fine-tuning complet (toutes les couches)
 %
-% ResNet-18 has ~11.2M parameters: its frugality penalty is 0.275, i.e. it
-% needs ~7% more macro F1 than MobileNetV2 (~2.2M params) to rank higher
-% on the leaderboard. This network mainly serves the frugality analysis.
-%
-% After training, evaluateFood11Metrics reports accuracy + macro F1.
-% Final submission: use predict_test_set.m on the best saved .mat.
+% Apres l'entrainement, evaluateFood11Metrics rapporte accuracy + macro F1.
+% Soumission finale : utiliser Predictshufflenet.m sur le meilleur .mat sauvegarde.
 
 close all
 
-inputSize = [64 64 3];  % MUST match FoodClassification_database.m
+inputSize = [64 64 3];  % Doit matcher FoodClassification_database.m
 numClasses = 11;
 
 assert(exist("augTrain", "var") == 1, ...
@@ -40,19 +31,27 @@ figure(Name="Training samples");
 montage(imgs);
 
 % ---------------------------------------------------------------------
-% Build the network: ImageNet weights, 11-class head, resized input.
+% Construction du reseau : poids ImageNet + tete 11 classes + entree redimensionnee.
+% TRANSFER LEARNING : le backbone est deja entraine sur ImageNet (1.2M images,
+% 1000 classes) -> il sait extraire bords, textures, formes. On adapte juste
+% la tete a nos 11 classes de nourriture : convergence plus rapide et meilleur
+% score qu'un entrainement from scratch avec seulement ~7893 images.
 % ---------------------------------------------------------------------
 pretrainedNet = resnet18;
 lgraph = layerGraph(pretrainedNet);
 
-% Replace the final fully connected layer (fc1000) with an 11-class head.
+% Remplace la derniere couche fully-connected (fc1000, sortie ImageNet a
+% 1000 classes) par une tete a 11 sorties. Obligatoire : les poids ImageNet
+% de cette couche ne correspondent pas a nos classes. Nouvelle couche = poids
+% aleatoires, c'est elle qui devra apprendre "quels motifs -> quel plat".
 isFullyConnected = arrayfun(@(layer) ...
     isa(layer, "nnet.cnn.layer.FullyConnectedLayer"), lgraph.Layers);
 classifierName = lgraph.Layers(find(isFullyConnected, 1, "last")).Name;
 newClassifier = fullyConnectedLayer(numClasses, Name=classifierName);
 lgraph = replaceLayer(lgraph, classifierName, newClassifier);
 
-% trainnet expects softmax instead of the legacy classification output.
+% trainnet attend une couche softmax au lieu de la vieille couche de sortie
+% de classification (API legacy trainNetwork). Meme emplacement, meme nom.
 isClassificationOutput = arrayfun(@(layer) ...
     isa(layer, "nnet.cnn.layer.ClassificationOutputLayer"), lgraph.Layers);
 classificationOutputName = lgraph.Layers( ...
@@ -60,7 +59,10 @@ classificationOutputName = lgraph.Layers( ...
 lgraph = replaceLayer(lgraph, classificationOutputName, ...
     softmaxLayer(Name=classificationOutputName));
 
-% Resized input layer (possible thanks to global average pooling).
+% Entree redimensionnee (si 64x64 ici au lieu de 224x224) : possible parce que
+% le reseau finit par un global average pooling, insensible a la taille
+% spatiale. On conserve la normalisation ImageNet (mean/std) pour que les
+% poids pre-entraines restent dans leur domaine d'entree.
 inputName = pretrainedNet.InputNames{1};
 pretrainedInputLayer = pretrainedNet.Layers( ...
     strcmp({pretrainedNet.Layers.Name}, inputName));
@@ -76,23 +78,30 @@ else
 end
 lgraph = replaceLayer(lgraph, inputName, inputLayer);
 
-% Inspect the network as a DLNETWORK (the object trainnet actually trains).
-% Do NOT analyze the raw lgraph: the analyzer then applies the legacy
-% trainNetwork rules -> false "missing/unconnected output layer" errors.
+% Inspection en tant que DLNETWORK (l'objet que trainnet entraine reellement).
 netPreview = dlnetwork(lgraph);
+% Nombre total de parametres apprenables : c'est la metrique de frugalite
+% du projet (penalite au classement si le reseau est trop gros).
 numParams = sum(cellfun(@numel, netPreview.Learnables.Value));
 fprintf("Total learnable parameters: %d (%.3f M)\n", numParams, numParams/1e6);
-analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
-% netPreview.Learnables      % uncomment for the learnables table as text
+analyzeNetwork(netPreview)  % panneau Learnables (en bas a gauche) = params par couche
+% netPreview.Learnables      % decommenter pour la table des learnables en texte
 
 %% =======================================================================
 %% TEST 1 : on n'entraine que la derniere couche (head only)
 % -----------------------------------------------------------------------
-% Toutes les couches pre-entrainees sont gelees (learn rate factor 0).
-% Seule la nouvelle couche fully-connected a 11 classes apprend :
-%   - LR de base 1e-4, facteur 10 sur la tete => LR effectif 1e-3
+% Mecanisme des learn rate factors : LR effectif d'un poids = LR de base x
+% facteur de la couche. 
+% Facteur 0 partout = backbone gele (aucune maj)
+% facteur 10 sur la tete => LR effectif 1e-3 sur la seule couche qui apprend.
+
+% On gele le backbone car ses poids ImageNet sont deja excellents : les
+% regler avec nos 7893 images risquerait de les degrader.
+
 %   - adam, MiniBatchSize 32, MaxEpochs 10, patience 4
 %   - validation une fois par epoque
+%   - ValidationPatience=4 : arret anticipe si la val loss cesse de
+%     s'ameliorer pendant 4 validations -> evite l'overfitting inutile
 % Resultat sauvegarde dans : ResNet18_Food11_test1_head.mat
 % >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
 %% =======================================================================
@@ -125,14 +134,13 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 % evaluateFood11Metrics(netT1, augTrainEval, labelsTrain, augVal, labelsVal);
 
 %% =======================================================================
-%% TEST 2 : fine-tuning partiel (le dernier stage res5 + la tete)
+%% TEST 2 : fine-tuning complet (toutes les couches)
 % -----------------------------------------------------------------------
-% On degele les K dernieres couches du backbone (K = 15, soit environ le
-% dernier stage res5 + la tete) en plus de la couche de classification :
-%   - LR 1e-4 uniforme sur les couches degelees (facteur 1 partout)
+% Toutes les couches apprennent, avec un LR tres faible pour ne pas
+% detruire les poids ImageNet :
+%   - LR de base 1e-5, facteur 10 sur la tete => tete a 1e-4
 %   - adam, MiniBatchSize 32, MaxEpochs 8, patience 3
-% Verifier la frontiere des K couches avec analyzeNetwork si besoin.
-% Resultat sauvegarde dans : ResNet18_Food11_test2_partial.mat
+% Resultat sauvegarde dans : ResNet18_Food11_test2_full.mat
 % >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
 %% =======================================================================
 % % Depart des poids ImageNet (defaut) :
@@ -141,59 +149,13 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 % % commenter la ligne au-dessus) :
 % % S = load("ResNet18_Food11_test1_head.mat"); netT2 = S.netT1;
 %
-% K = 15;  % nombre de couches degelees a partir de la fin
-% layersT2 = netT2.Layers;
-% unfreezeFrom = numel(layersT2) - K + 1;
 % for idx = 1:height(netT2.Learnables)
-%     lyr = netT2.Learnables.Layer(idx);
-%     pos = find(strcmp({layersT2.Name}, char(lyr)), 1);
-%     factor = double(pos >= unfreezeFrom);
-%     netT2 = setLearnRateFactor(netT2, lyr, ...
-%         netT2.Learnables.Parameter(idx), factor);
+%     netT2 = setLearnRateFactor(netT2, ...
+%         string(netT2.Learnables.Layer(idx)), ...
+%         string(netT2.Learnables.Parameter(idx)), 1);
 % end
-%
-% miniBatchSize = 32; maxEpochs = 8;
-% progressFcn = makeCourseProgressOutputFcn( ...
-%     numel(labelsTrain), miniBatchSize, maxEpochs, 10);
-% options = trainingOptions("adam", ...
-%     InitialLearnRate=1e-4, ...
-%     MaxEpochs=maxEpochs, ...
-%     MiniBatchSize=miniBatchSize, ...
-%     Shuffle="every-epoch", ...
-%     ValidationData=augVal, ...
-%     ValidationFrequency=round(numel(labelsTrain)/miniBatchSize), ...
-%     ValidationPatience=3, ...
-%     Verbose=false, ...
-%     Plots="training-progress", ...
-%     OutputFcn=progressFcn, ...
-%     Metrics="accuracy");
-% netT2 = trainnet(augTrain, netT2, "crossentropy", options);
-% save("ResNet18_Food11_test2_partial.mat", "netT2", "-v7.3");
-% evaluateFood11Metrics(netT2, augTrainEval, labelsTrain, augVal, labelsVal);
-
-%% =======================================================================
-%% TEST 3 : fine-tuning complet (toutes les couches)
-% -----------------------------------------------------------------------
-% Toutes les couches apprennent, avec un LR tres faible pour ne pas
-% detruire les poids ImageNet :
-%   - LR de base 1e-5, facteur 10 sur la tete => tete a 1e-4
-%   - adam, MiniBatchSize 32, MaxEpochs 8, patience 3
-% Resultat sauvegarde dans : ResNet18_Food11_test3_full.mat
-% >>> Decommenter TOUT le bloc ci-dessous pour lancer ce test. <<<
-%% =======================================================================
-% % Depart des poids ImageNet (defaut) :
-% netT3 = dlnetwork(lgraph);
-% % OU depart des poids du Test 1 (decommenter les 2 lignes suivantes et
-% % commenter la ligne au-dessus) :
-% % S = load("ResNet18_Food11_test1_head.mat"); netT3 = S.netT1;
-%
-% for idx = 1:height(netT3.Learnables)
-%     netT3 = setLearnRateFactor(netT3, ...
-%         string(netT3.Learnables.Layer(idx)), ...
-%         string(netT3.Learnables.Parameter(idx)), 1);
-% end
-% netT3 = setLearnRateFactor(netT3, classifierName, "Weights", 10);
-% netT3 = setLearnRateFactor(netT3, classifierName, "Bias", 10);
+% netT2 = setLearnRateFactor(netT2, classifierName, "Weights", 10);
+% netT2 = setLearnRateFactor(netT2, classifierName, "Bias", 10);
 %
 % miniBatchSize = 32; maxEpochs = 8;
 % progressFcn = makeCourseProgressOutputFcn( ...
@@ -210,6 +172,6 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 %     Plots="training-progress", ...
 %     OutputFcn=progressFcn, ...
 %     Metrics="accuracy");
-% netT3 = trainnet(augTrain, netT3, "crossentropy", options);
-% save("ResNet18_Food11_test3_full.mat", "netT3", "-v7.3");
-% evaluateFood11Metrics(netT3, augTrainEval, labelsTrain, augVal, labelsVal);
+% netT2 = trainnet(augTrain, netT2, "crossentropy", options);
+% save("ResNet18_Food11_test2_full.mat", "netT2", "-v7.3");
+% evaluateFood11Metrics(netT2, augTrainEval, labelsTrain, augVal, labelsVal);

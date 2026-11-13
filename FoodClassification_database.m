@@ -50,5 +50,11 @@ augTrain = augmentedImageDatastore(inputSize(1:2), trainData, ...
 % Validation: resize only. Never augment validation data.
 augVal = augmentedImageDatastore(inputSize(1:2), valData);
 
+% Train evaluation copy: resize only, NO augmentation. Used to measure
+% train-set accuracy after training (sur/sous-apprentissage diagnosis).
+% (augTrain itself augments at every read, so it cannot be used to
+% faithfully measure train accuracy.)
+augTrainEval = augmentedImageDatastore(inputSize(1:2), trainData);
+
 fprintf("Train: %d images | Val: %d images | input %dx%d\n", ...
     numel(labelsTrain), numel(labelsVal), inputSize(1), inputSize(2));

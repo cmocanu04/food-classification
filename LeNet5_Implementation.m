@@ -65,4 +65,4 @@ net = trainnet(augTrain, layers, "crossentropy", options);
 
 % Save the trained network and evaluate on train and validation sets.
 save("LeNet5_Food11.mat", "net", "-v7.3");
-evaluateFood11Metrics(net, augVal, labelsVal);
+evaluateFood11Metrics(net, augTrainEval, labelsTrain, augVal, labelsVal);

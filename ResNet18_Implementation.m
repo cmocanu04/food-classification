@@ -122,7 +122,7 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 %     Metrics="accuracy");
 % netT1 = trainnet(augTrain, netT1, "crossentropy", options);
 % save("ResNet18_Food11_test1_head.mat", "netT1", "-v7.3");
-% evaluateFood11Metrics(netT1, augVal, labelsVal);
+% evaluateFood11Metrics(netT1, augTrainEval, labelsTrain, augVal, labelsVal);
 
 %% =======================================================================
 %% TEST 2 : fine-tuning partiel (le dernier stage res5 + la tete)
@@ -169,7 +169,7 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 %     Metrics="accuracy");
 % netT2 = trainnet(augTrain, netT2, "crossentropy", options);
 % save("ResNet18_Food11_test2_partial.mat", "netT2", "-v7.3");
-% evaluateFood11Metrics(netT2, augVal, labelsVal);
+% evaluateFood11Metrics(netT2, augTrainEval, labelsTrain, augVal, labelsVal);
 
 %% =======================================================================
 %% TEST 3 : fine-tuning complet (toutes les couches)
@@ -212,4 +212,4 @@ analyzeNetwork(netPreview)  % Learnables panel (bottom-left) = per-layer params
 %     Metrics="accuracy");
 % netT3 = trainnet(augTrain, netT3, "crossentropy", options);
 % save("ResNet18_Food11_test3_full.mat", "netT3", "-v7.3");
-% evaluateFood11Metrics(netT3, augVal, labelsVal);
+% evaluateFood11Metrics(netT3, augTrainEval, labelsTrain, augVal, labelsVal);
